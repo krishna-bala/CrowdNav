@@ -166,7 +166,7 @@ def cb_real_pose(msg):
 
 
 def initialize_robot():
-    model_dir = "crowd_nav/data/output-torch-1.4.0/"
+    model_dir = "crowd_nav/data/output-lab-base-cases/"
     phase = "test"
     model_weights = model_dir + "rl_model.pth"
     policy_config_file = model_dir + "policy.config"
@@ -217,7 +217,7 @@ if __name__ == '__main__':
 
     # SARL specific intializations
     robot = initialize_robot()
-    
+
     try:
         state = ModelState()
         state_prev_time_stamp = None

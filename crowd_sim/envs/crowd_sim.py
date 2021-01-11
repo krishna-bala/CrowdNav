@@ -87,11 +87,14 @@ class CrowdSim(gym.Env):
 
         logging.info('human number: {}'.format(self.human_num))
         if self.randomize_attributes:
-            logging.info("Randomize human's radius and preferred speed")
+            logging.info("Randomize human and robot's preferred speed")
         else:
-            logging.info("Not randomize human's radius and preferred speed")
+            logging.info("Not randomize human and robot's preferred speed")
         logging.info('Training simulation: {}, test simulation: {}'.format(self.train_val_sim, self.test_sim))
-        logging.info('Square width: {}, circle width: {}'.format(self.square_width, self.circle_radius))
+        if self.train_val_sim != 'lab_base_case':
+            logging.info('Square width: {}, circle width: {}'.format(self.square_width, self.circle_radius))
+        else:
+            logging.info('Lab width (x): {}, Lab length (y): {}'.format(self.lab_x, self.lab_y))
 
     def set_robot(self, robot):
         self.robot = robot

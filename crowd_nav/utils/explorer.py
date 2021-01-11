@@ -119,8 +119,8 @@ class Explorer(object):
                 feature_size = state.size()[0]
             else:
                 human_num, feature_size = state.size()
-            if human_num != 5:
-                padding = torch.zeros((5 - human_num, feature_size))
+            if human_num != 3:
+                padding = torch.zeros((3 - human_num, feature_size))
                 state = torch.cat([state, padding])
             self.memory.push((state, value))
 

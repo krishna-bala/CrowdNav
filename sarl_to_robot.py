@@ -13,6 +13,10 @@ from crowd_sim.envs.utils.robot import Robot
 from crowd_sim.envs.utils.state import ObservableState
 from crowd_sim.envs.utils.action import ActionXY
 
+from MPC import traj_opt
+import copy
+from matplotlib import pyplot as plt
+
 
 class SARLPolicy:
 
@@ -20,6 +24,14 @@ class SARLPolicy:
 
         self.robot_radius = robot_data['radius']
         self.robot_pref_speed = robot_data['pref_speed']  # TODO: Make this a dynamic variable
+        self.robot_mpc = robot_data['mpc']
+        if self.robot_mpc:
+            self.dt = 0.1
+            self.times_steps = int(1.0 / self.dt)
+            self.mpc = traj_opt(dt=self.dt, time_steps=self.times_steps)
+            self.mpc_state = ModelState()
+            self.mpc_psi = None
+
         self.stop_moving_flag = False
         self.state = ModelState()
         self.STATE_SET_FLAG = False
@@ -36,21 +48,15 @@ class SARLPolicy:
 
     def compute_action(self):
 
-        start_time = time.time()
-
+        tic = time.time()
         # Set robot
         px, py = self.state.pose.position.x, self.state.pose.position.y
         vx, vy = self.state.twist.linear.x, self.state.twist.linear.y
         gx, gy = self.goal.pose.position.x, self.goal.pose.position.y
-
         q = self.state.pose.orientation
         _, _, yaw = transformations.euler_from_quaternion([q.x, q.y, q.z, q.w])
-        theta = yaw
-
         radius, v_pref = self.robot_radius, self.robot_pref_speed
-
-        robot.set(px, py, gx, gy, vx, vy, theta, radius, v_pref)
-
+        robot.set(px, py, gx, gy, vx, vy, yaw, radius, v_pref)
         robot_dist_to_goal = np.linalg.norm(np.array([px, py]) - np.array([gx, gy]))
 
         if robot_dist_to_goal < self.GOAL_THRESH:
@@ -59,22 +65,117 @@ class SARLPolicy:
         else:
             self.stop_moving_flag = False
 
-        # Communicate actions to the control node:A
-        print "\n================================================================\n"
-        print "SARLPolicyNode.compute_action:"
-        print "--->self.other_agents_state pos: ", self.other_agents_state[0].position
-        print "--->self.other_agents_state vel: ", self.other_agents_state[0].velocity
-        print "--->self.pos: ", self.state.pose.position.x
-        print "---->self.position.y", self.state.pose.position.y
-        print "--->self.vel: ", np.linalg.norm([self.state.twist.linear.x, self.state.twist.linear.y])
+        ### INFO ###
+        # print "\n================================================================\n"
+        # print "SARLPolicyNode.compute_action:"
+        # print "--->self.vel.x: ", self.state.twist.linear.x
+        # print "--->self.vel.y: ", self.state.twist.linear.y
+        # print "--->self.vel: ", np.linalg.norm([self.state.twist.linear.x, self.state.twist.linear.y])
+        ### INFO ###
 
         self.desired_action = robot.act(self.other_agents_state)
         twist = Twist()
-        twist.linear.x = np.cos(theta)*self.desired_action.vx + np.sin(theta)*self.desired_action.vy
-        twist.linear.y = -np.sin(theta)*self.desired_action.vx + np.cos(theta)*self.desired_action.vy
-        print "\n--->SARLPolicyNode.compute_action runtime: ", time.time() - start_time
-        print "\n================================================================\n"
+        twist.linear.x = np.cos(yaw)*self.desired_action.vx + np.sin(yaw)*self.desired_action.vy
+        twist.linear.y = -np.sin(yaw)*self.desired_action.vx + np.cos(yaw)*self.desired_action.vy
+
+        ### INFO ###
+        # print "\n--->SARLPolicyNode.compute_action runtime: ", time.time() - tic
+        # print "\n================================================================\n"
+        ### INFO ###
+
         return twist
+
+    def compute_mpc(self):
+        plot_flag = False
+        self.mpc_state.pose.position.x = self.state.pose.position.x
+        self.mpc_state.pose.position.y = self.state.pose.position.y
+        self.mpc_state.twist.linear.x = self.state.twist.linear.x
+        self.mpc_state.twist.linear.y = self.state.twist.linear.y
+
+        global other_agents
+        propagated_agents_state = self.mpc.generate_obs_positions(copy.deepcopy(other_agents))
+
+        q = self.state.pose.orientation
+        _, _, yaw = transformations.euler_from_quaternion([q.x, q.y, q.z, q.w])
+
+        self.mpc_psi = yaw
+
+        ref_traj = [[0, 0, self.mpc_state.twist.linear.x, 0, 0, self.mpc_state.twist.linear.y,
+                     self.mpc_state.pose.position.x, self.mpc_state.pose.position.y]]
+
+        for i in range(self.times_steps):
+            other_agents_copy = other_agents_from_states(propagated_agents_state[i])
+            action, stop_moving_flag = self.rollout_mpc(other_agents_copy)
+            if stop_moving_flag:
+                break
+            curr_pos, curr_vel = self.compute_mpc_state(action)
+            ref_traj.append([0, 0, curr_vel[0], 0, 0, curr_vel[1], curr_pos[0], curr_pos[1]])
+
+        if (len(ref_traj) < self.times_steps + 1):
+            last_state = ref_traj[-1]
+            for i in range(self.time_steps + 1 - len(ref_traj)):
+                ref_traj.append(last_state)
+
+        s_opt, u_opt = self.mpc.solv(ref_traj, get_s_opt=plot_flag)
+        if (plot_flag):
+            u_opt = u_opt[0]
+            ref_traj = np.array(ref_traj)
+            plt.plot(ref_traj[:,6],ref_traj[:,7])
+            plt.plot(s_opt[:,0],s_opt[:,1])
+            plt.show()
+
+        mpc_twist = Twist()
+        mpc_twist.linear.x = u_opt[0] * np.cos(yaw) + u_opt[1] * np.sin(yaw)
+        mpc_twist.linear.y = -1 * u_opt[0] * np.sin(yaw) + u_opt[1] * np.cos(yaw)
+
+        return mpc_twist
+
+    def compute_mpc_state(self, action):
+
+        vx = np.cos(self.mpc_psi)*action.vx + np.sin(self.mpc_psi)*action.vy
+        vy = -np.sin(self.mpc_psi)*action.vx + np.cos(self.mpc_psi)*action.vy
+
+        self.mpc_state.pose.position.x = self.mpc_state.pose.position.x + vx*self.dt
+        self.mpc_state.pose.position.y = self.mpc_state.pose.position.y + vy*self.dt
+        self.mpc_state.twist.linear.x = vx
+        self.mpc_state.twist.linear.y = vy
+
+        return [self.mpc_state.pose.position.x, self.mpc_state.pose.position.y], [vx, vy]
+
+    def rollout_mpc(self, other_agents_copy):
+        px = self.mpc_state.pose.position.x
+        py = self.mpc_state.pose.position.y
+        vx = self.mpc_state.twist.linear.x
+        vy = self.mpc_state.twist.linear.y
+        gx, gy = self.goal.pose.position.x, self.goal.pose.position.y
+        q = self.mpc_state.pose.orientation
+        _, _, yaw = transformations.euler_from_quaternion([q.x, q.y, q.z, q.w])
+        radius, v_pref = self.robot_radius, self.robot_pref_speed
+
+        # in case current speed is larger than desired speed
+        v = np.linalg.norm(np.array([vx, vy]))
+        if v > v_pref:
+            vx = vx * v_pref / v
+            vy = vy * v_pref / v
+
+        robot.set(px, py, gx, gy, vx, vy, yaw, radius, v_pref)
+
+        mpc_action = robot.act(other_agents_copy)
+
+        robot_dist_to_goal = np.linalg.norm(np.array([px, py]) - np.array([gx, gy]))
+
+        if robot_dist_to_goal < self.GOAL_THRESH:
+            stop_moving_flag = True
+        else:
+            stop_moving_flag = False
+
+        return mpc_action, stop_moving_flag
+
+    def generate_twist(self):
+        if self.robot_mpc:
+            self.compute_mpc()
+        else:
+            self.compute_action()
 
     def update_state(self, robot_state):
         self.state = robot_state
@@ -122,6 +223,19 @@ def cb_other_agents(msg):
         vy = msg.twist[i].linear.y
         other_agents.append(ObservableState(x, y, vx, vy, radius))
     OTHER_AGENTS_SET = True
+
+
+def other_agents_from_states(states):
+    other_agents_copy = []
+    num_agents = len(states)
+    for i in range(num_agents):
+        radius = 0.3  # Spheres in gazebo
+        x = states[i][0]
+        y = states[i][1]
+        vx = states[i][2]
+        vy = states[i][3]
+        other_agents_copy.append(ObservableState(x, y, vx, vy, radius))
+    return other_agents_copy
 
 
 def cb_dynamic_goal(msg):
@@ -213,7 +327,7 @@ def initialize_robot():
 
 
 if __name__ == '__main__':
-    print('About to run SARL')
+    print('About to run SARL...')
 
     # SARL specific intializations
     robot = initialize_robot()
@@ -227,13 +341,23 @@ if __name__ == '__main__':
         GOAL_SET = False
         other_agents = []
         OTHER_AGENTS_SET = False
-        robot_data = {'goal': None, 'radius': 0.3, 'pref_speed': 0.8, 'name': 'balabot'}
+
+        robot_data = {'goal': None, 'radius': 0.3, 'pref_speed': 0.8, 'name': 'balabot', 'mpc': True}
+
+        scenario = input("Running in real or gazebo?\n (1 for real, 2 for gazebo): ")
+        mpc = input("Layer MPC on top? (y/n): ")
+
+        if mpc[0].lower() == 'y':
+            robot_data['mpc'] = True
+        else:
+            robot_data['mpc'] = False
+
         sarl_policy_node = SARLPolicy(robot_data)
         rospy.init_node(robot_data['name'], anonymous=False)
         rate = rospy.Rate(10)
         node_name = rospy.get_name()
-        scenario = input("Running in real or gazebo?\n (1 for real, 2 for gazebo):")
         control_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=1)
+
         if scenario == 2:
             sub_other_agents = rospy.Subscriber('/sphere_states', ModelStates, cb_other_agents)
             sub_pose = rospy.Subscriber('/sim_pathbot_state', ModelState, cb_state)
@@ -242,12 +366,13 @@ if __name__ == '__main__':
             sub_goal = rospy.Subscriber('/vrpn_client_node/agent1/pose', PoseStamped, cb_dynamic_goal)
             sub_other_agent = rospy.Subscriber('/vrpn_client_node/agent2/pose', PoseStamped, cb_real_other_agent)
             sub_pose = rospy.Subscriber('/vrpn_client_node/pathbot/pose', PoseStamped, cb_real_pose)
+
         while not rospy.is_shutdown():
             if STATE_SET and GOAL_SET and OTHER_AGENTS_SET:
                 sarl_policy_node.update_state(state)
                 sarl_policy_node.update_dynamic_goal(goal)
                 sarl_policy_node.set_other_agents(other_agents)
-                control_pub.publish(sarl_policy_node.compute_action())
+                control_pub.publish(sarl_policy_node.generate_twist())
             rate.sleep()
     except rospy.ROSInterruptException, e:
         raise e

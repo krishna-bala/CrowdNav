@@ -18,3 +18,6 @@ videos/
 sarl_policy_test.py
 sarl_star_to_twist_old.py
 sarl_to_twist.py
+
+# Unnamed data output
+**/data/output/

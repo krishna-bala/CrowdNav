@@ -99,6 +99,22 @@ class CrowdSim(gym.Env):
     def set_robot(self, robot):
         self.robot = robot
 
+    def sample_robot(self):
+        """
+        Samples robot with px, py, gx, gy from zone 3 of the lab training space layout
+        :return: None
+        """
+        x = self.lab_x
+        y = self.lab_y
+        area_zones = {'start': [-1, x + 1, -1, 1], 'goal': [-1, x + 1, y - 1, y + 1]}
+        px = np.random.uniform(area_zones['start'][0], area_zones['start'][1])
+        py = np.random.uniform(area_zones['start'][2], area_zones['start'][3])
+        gx = np.random.uniform(area_zones['goal'][0], area_zones['goal'][1])
+        gy = np.random.uniform(area_zones['goal'][2], area_zones['goal'][3])
+        heading = self.get_heading([px, py], [gx, gy])
+        self.robot.set(px, py, gx, gy, 0, 0, heading)
+
+
     def generate_random_robot_position(self, rule):
         """
         Generate robot position according to certain rule
@@ -174,6 +190,11 @@ class CrowdSim(gym.Env):
         :return:
         """
         # initial min separation distance to avoid danger penalty at beginning
+
+        # case map lists agent numbers according to lab training layout
+        case_map = {'static1': [5], 'static2': [6, 7], 'dynamic1': [1, 2, 3, 4], 'dynamic2': [1, 2, 3, 4],
+                    'dynamic3': [1, 2, 3, 4]}
+
         if rule == 'square_crossing':
             self.humans = []
             for i in range(human_num):
@@ -182,6 +203,16 @@ class CrowdSim(gym.Env):
             self.humans = []
             for i in range(human_num):
                 self.humans.append(self.generate_circle_crossing_human())
+        elif rule[:9] == 'lab_train':
+            self.humans = []
+            case = rule[10:]
+            # agents to sample
+            agents = case_map[case]
+            for i in range(human_num):
+                # pop an agent from our lianst to create a hum
+                human_i = agents.pop(agents.index(np.random.choice(agents)))
+                # append specific human
+                self.humans.append(self.generate_specific_human(human_i))
         elif rule[:13] == 'lab_base_case':
             self.humans = []
             for i in range(human_num):
@@ -238,6 +269,71 @@ class CrowdSim(gym.Env):
                     self.humans.append(human)
         else:
             raise ValueError("Rule doesn't exist")
+
+    def generate_specific_human(self, human_i):
+        """
+        Generate a specific human from the 7 options
+        :return: Human obj
+        """
+        human = Human(self.config, 'humans')
+        if self.randomize_attributes:
+            human.sample_random_attributes()
+
+        x = self.lab_x
+        y = self.lab_y
+        # each zone maps to [xmin, xmax, ymin, ymax] boundaries for each zone.
+        area_zones = {1: [-1, x + 1, y - 1, y + 1], 2: [x - 1, x + 1, -1, y + 1], 3: [-1, x + 1, -1, 1],
+                      4: [-1, 1, -1, y + 1], 5: [0, x, y / 2.0 - 1, y / 2.0 + 1],
+                      6: [x / 2.0, x, y / 2.0 - 1, y / 2.0 + 1], 7: [0, x / 2.0, y / 2.0 - 1, y / 2.0 + 1]}
+
+        start_bounds = None
+        end_bounds = None
+
+        if human_i == 1:
+            start_bounds = area_zones[1]
+            end_bounds = area_zones[3]
+        elif human_i == 2:
+            start_bounds = area_zones[2]
+            end_bounds = area_zones[4]
+        elif human_i == 3:
+            start_bounds = area_zones[3]
+            end_bounds = area_zones[1]
+        elif human_i == 4:
+            start_bounds = area_zones[4]
+            end_bounds = area_zones[2]
+        elif human_i == 5:
+            start_bounds = area_zones[5]
+        elif human_i == 6:
+            start_bounds = area_zones[6]
+        elif human_i == 7:
+            start_bounds = area_zones[7]
+
+        while True:
+            collide = False
+            px = np.random.uniform(start_bounds[0], start_bounds[1])
+            py = np.random.uniform(start_bounds[2], start_bounds[3])
+            if end_bounds is not None:
+                gx = np.random.uniform(end_bounds[0], end_bounds[1])
+                gy = np.random.uniform(end_bounds[2], end_bounds[3])
+            else:
+                gx = px
+                gy = py
+
+            for agent in [self.robot] + self.humans:
+                if norm((px - agent.px, py - agent.py)) < (human.radius + agent.radius + self.discomfort_dist):
+                    collide = True
+                    break
+                if norm((gx - agent.gx, gy - agent.gy)) < (human.radius + agent.radius + self.discomfort_dist):
+                    collide = True
+                    break
+
+            if not collide:
+                break
+
+        heading = self.get_heading([px, py], [gx, gy])
+        human.set(px, py, gx, gy, 0, 0, heading)
+        self.humans_set += 1
+        return human
 
     def generate_lab_case_human(self, rule='lab_base_case_random'):
         """
@@ -481,14 +577,19 @@ class CrowdSim(gym.Env):
         """
         if self.robot is None:
             raise AttributeError('robot has to be set!')
+
         assert phase in ['train', 'val', 'test']
+
         if test_case is not None:
             self.case_counter[phase] = test_case
+
         self.global_time = 0
+
         if phase == 'test':
             self.human_times = [0] * self.human_num
         else:
             self.human_times = [0] * (self.human_num if self.robot.policy.multiagent_training else 1)
+
         if not self.robot.policy.multiagent_training:
             self.train_val_sim = 'circle_crossing'
 
@@ -497,36 +598,68 @@ class CrowdSim(gym.Env):
         else:
             counter_offset = {'train': self.case_capacity['val'] + self.case_capacity['test'],
                               'val': 0, 'test': self.case_capacity['val']}
+
             if self.case_counter[phase] >= 0:
                 np.random.seed(counter_offset[phase] + self.case_counter[phase])
                 probability = np.random.rand()
-                if probability > 0.5:
-                    rule = 'lab_base_case_random'
-                else:
-                    case = np.random.randint(0, 7)
-                    rule = 'lab_base_case_' + str(case)
+                human_num = None
+                rule = None
 
-                # Set Robot
-                self.generate_random_robot_position(rule)
-                self.humans_set = 0 # reset humans counter
+                if self.train_val_sim == 'lab_base_case':
+                    if probability > 0.5:
+                        rule = 'lab_base_case_random'
+                    else:
+                        case = np.random.randint(0, 7)
+                        rule = 'lab_base_case_' + str(case)
+
+                    if rule[14] == '0' or rule[14] == '2' or rule[14] == '3' or rule[14] == '4':
+                        human_num = 1
+                    elif rule[14] == '1' or rule[14] == '5':
+                        human_num = 2
+                    elif rule[14] == '6':
+                        human_num = 3
+                    else:
+                        human_num = self.human_num if self.robot.policy.multiagent_training else 1
+
+                elif self.train_val_sim == 'lab_train' or self.test_sim == 'lab_train':
+                    if probability < 0.05:
+                        rule = 'lab_train_static1'
+                        human_num = 1
+                    elif probability < 0.10:
+                        rule = 'lab_train_static2'
+                        human_num = 2
+                    elif probability < 0.4:
+                        rule = 'lab_train_dynamic1'
+                        human_num = 1
+                    elif probability < 0.7:
+                        rule = 'lab_train_dynamic2'
+                        human_num = 2
+                    else:
+                        rule = 'lab_train_dynamic3'
+                        human_num = 3
+
+                self.human_num = human_num
+
+                self.sample_robot()  # Set Robot
+                self.humans_set = 0  # reset humans counter
 
                 if phase in ['train', 'val']:
                     # Set num_humans based on base_case
-                    if len(rule) > 14:
-                        if rule[14] == '0' or rule[14] == '2' or rule[14] == '3' or rule[14] == '4':
-                            human_num = 1
-                        elif rule[14] == '1' or rule[14] == '5':
-                            human_num = 2
-                        elif rule[14] == '6':
-                            human_num = 3
-                        else:
-                            human_num = self.human_num if self.robot.policy.multiagent_training else 1
-                    else: # rule != one of the lab base cases
+                    if human_num is None:  # rule != one of the lab base cases
                         human_num = self.human_num if self.robot.policy.multiagent_training else 1
                     # Generate Humans
                     self.generate_random_human_position(human_num=human_num, rule=rule)
+                    logging.debug("%s %d: configuration [agent, px, py, gx, gy, radius, vpref]", phase,
+                                  self.case_counter[phase])
                 else:
-                    self.generate_random_human_position(human_num=self.human_num, rule=self.test_sim)
+                    self.generate_random_human_position(human_num=human_num, rule=rule)
+
+                logging.debug("[robot, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f]", self.robot.px, self.robot.py,
+                             self.robot.gx, self.robot.gy, self.robot.radius, self.robot.v_pref)
+
+                for i, human in enumerate(self.humans):
+                    logging.debug("[agent_%d, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f]", i, human.px, human.py, human.gx,
+                                 human.gy, human.radius, human.v_pref)
 
                 # case_counter is always between 0 and case_size[phase]
                 self.case_counter[phase] = (self.case_counter[phase] + 1) % self.case_size[phase]
@@ -677,7 +810,7 @@ class CrowdSim(gym.Env):
         y_offset = 0.11
         cmap = plt.cm.get_cmap('hsv', 10)
         robot_color = 'yellow'
-        goal_color = 'red'
+        goal_color = ['red', 'blue', 'green', 'black']
         arrow_color = 'red'
         arrow_style = patches.ArrowStyle("->", head_length=4, head_width=2)
 
@@ -734,18 +867,26 @@ class CrowdSim(gym.Env):
         elif mode == 'video':
             fig, ax = plt.subplots(figsize=(7, 7))
             ax.tick_params(labelsize=16)
-            ax.set_xlim(-6, 6)
-            ax.set_ylim(-6, 6)
+            ax.set_xlim(-1, 5)
+            ax.set_ylim(-1, 6)
             ax.set_xlabel('x(m)', fontsize=16)
             ax.set_ylabel('y(m)', fontsize=16)
 
             # add robot and its goal
             robot_positions = [state[0].position for state in self.states]
-            goal = mlines.Line2D([0], [4], color=goal_color, marker='*', linestyle='None', markersize=15, label='Goal')
+            goals = []
+            goals.append(mlines.Line2D([self.robot.gx], [self.robot.gy], color=goal_color[0], marker='*',
+                                     linestyle='None', markersize=15, label='robot goal'))
+
+            for i, human in enumerate(self.humans):
+                goals.append(mlines.Line2D([human.gx], [human.gy], color=goal_color[i+1], marker='x', linestyle='None',
+                                     markersize=15, label='agent' + str(i) + 'goal'))
+
             robot = plt.Circle(robot_positions[0], self.robot.radius, fill=True, color=robot_color)
             ax.add_artist(robot)
-            ax.add_artist(goal)
-            plt.legend([robot, goal], ['Robot', 'Goal'], fontsize=16)
+            for goal in goals:
+                ax.add_artist(goal)
+            plt.legend([robot, goals[0]], ['Robot', 'Robot Goal', 'Agent2 Goal', 'Agent3 Goal'], fontsize=16)
 
             # add humans and their numbers
             human_positions = [[state[1][j].position for j in range(len(self.humans))] for state in self.states]

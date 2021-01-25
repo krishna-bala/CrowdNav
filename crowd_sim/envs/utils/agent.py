@@ -41,7 +41,7 @@ class Agent(object):
         Sample agent radius and v_pref attribute from certain distribution
         :return:
         """
-        self.v_pref = np.random.uniform(0.5, 1.5)
+        self.v_pref = np.random.uniform(0.6, 1.0)
         #self.radius = np.random.uniform(0.3, 0.5)
 
     def set(self, px, py, gx, gy, vx, vy, theta, radius=None, v_pref=None):

@@ -49,11 +49,17 @@ def main():
 
     # configure logging
     mode = 'a' if args.resume else 'w'
-    file_handler = logging.FileHandler(log_file, mode=mode)
-    stdout_handler = logging.StreamHandler(sys.stdout)
     level = logging.INFO if not args.debug else logging.DEBUG
-    logging.basicConfig(level=level, handlers=[stdout_handler, file_handler],
+    logging.basicConfig(filename=log_file, filemode=mode, level=level,
                         format='%(asctime)s, %(levelname)s: %(message)s', datefmt="%Y-%m-%d %H:%M:%S")
+
+    # create console handler, set level to info
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.INFO)
+    formatter = logging.Formatter("%(asctime)s, %(levelname)s: %(message)s")
+    handler.setFormatter(formatter)
+    logging.getLogger('').addHandler(handler)
+
     repo = git.Repo(search_parent_directories=True)
     logging.info('Current git head hash code: %s'.format(repo.head.object.hexsha))
     device = torch.device("cuda:0" if torch.cuda.is_available() and args.gpu else "cpu")

@@ -99,18 +99,22 @@ class CrowdSim(gym.Env):
     def set_robot(self, robot):
         self.robot = robot
 
-    def sample_robot(self):
+    def sample_robot(self, robot=None):
         """
         Samples robot with px, py, gx, gy from zone 3 of the lab training space layout
         :return: None
         """
-        x = self.lab_x
-        y = self.lab_y
-        area_zones = {'start': [-1, x + 1, -1, 1], 'goal': [-1, x + 1, y - 1, y + 1]}
-        px = np.random.uniform(area_zones['start'][0], area_zones['start'][1])
-        py = np.random.uniform(area_zones['start'][2], area_zones['start'][3])
-        gx = np.random.uniform(area_zones['goal'][0], area_zones['goal'][1])
-        gy = np.random.uniform(area_zones['goal'][2], area_zones['goal'][3])
+        if robot is not None:
+            px, py = robot[0]
+            gx, gy = robot[1]
+        else:
+            x = self.lab_x
+            y = self.lab_y
+            area_zones = {'start': [-1, x + 1, -1, 1], 'goal': [-1, x + 1, y - 1, y + 1]}
+            px = np.random.uniform(area_zones['start'][0], area_zones['start'][1])
+            py = np.random.uniform(area_zones['start'][2], area_zones['start'][3])
+            gx = np.random.uniform(area_zones['goal'][0], area_zones['goal'][1])
+            gy = np.random.uniform(area_zones['goal'][2], area_zones['goal'][3])
         heading = self.get_heading([px, py], [gx, gy])
         self.robot.set(px, py, gx, gy, 0, 0, heading)
 
@@ -570,7 +574,7 @@ class CrowdSim(gym.Env):
         del sim
         return self.human_times
 
-    def reset(self, phase='test', test_case=None):
+    def reset(self, phase='test', test_case=None, specific_test=None):
         """
         Set px, py, gx, gy, vx, vy, theta for robot and humans
         :return:
@@ -583,97 +587,73 @@ class CrowdSim(gym.Env):
         if test_case is not None:
             self.case_counter[phase] = test_case
 
+        if specific_test is not None:
+            robot_start = input("Enter robot start location (px,py): ")
+            robot_goal = input("Enter robot goal location (gx,gy): ")
+            robot = [robot_start, robot_goal]
+            num_obs = input("Enter number of obstacles: ")
+            obs = []
+            for i in range(num_obs):
+                obs_start = input("Enter obstacle %d's start location (px,py): " % i)
+                obs_goal = input("Enter obstacle %d's goal location (gx,gy): " % i)
+                obs_vpref = input("Enter obstacle %d's vpref: ")
+                obs.append([obs_start, obs_goal, obs_vpref])
+
         self.global_time = 0
 
-        if phase == 'test':
-            self.human_times = [0] * self.human_num
-        else:
-            self.human_times = [0] * (self.human_num if self.robot.policy.multiagent_training else 1)
+        counter_offset = {'train': self.case_capacity['val'] + self.case_capacity['test'],
+                          'val': 0, 'test': self.case_capacity['val']}
 
-        if not self.robot.policy.multiagent_training:
-            self.train_val_sim = 'circle_crossing'
+        if self.case_counter[phase] >= 0:
+            np.random.seed(counter_offset[phase] + self.case_counter[phase])
+            probability = np.random.rand()
+            human_num = None
+            rule = None
 
-        if self.config.get('humans', 'policy') == 'trajnet':
-            raise NotImplementedError
-        else:
-            counter_offset = {'train': self.case_capacity['val'] + self.case_capacity['test'],
-                              'val': 0, 'test': self.case_capacity['val']}
-
-            if self.case_counter[phase] >= 0:
-                np.random.seed(counter_offset[phase] + self.case_counter[phase])
-                probability = np.random.rand()
-                human_num = None
-                rule = None
-
-                if self.train_val_sim == 'lab_base_case':
-                    if probability > 0.5:
-                        rule = 'lab_base_case_random'
-                    else:
-                        case = np.random.randint(0, 7)
-                        rule = 'lab_base_case_' + str(case)
-
-                    if rule[14] == '0' or rule[14] == '2' or rule[14] == '3' or rule[14] == '4':
-                        human_num = 1
-                    elif rule[14] == '1' or rule[14] == '5':
-                        human_num = 2
-                    elif rule[14] == '6':
-                        human_num = 3
-                    else:
-                        human_num = self.human_num if self.robot.policy.multiagent_training else 1
-
-                elif self.train_val_sim == 'lab_train' or self.test_sim == 'lab_train':
-                    if probability < 0.05:
-                        rule = 'lab_train_static1'
-                        human_num = 1
-                    elif probability < 0.10:
-                        rule = 'lab_train_static2'
-                        human_num = 2
-                    elif probability < 0.4:
-                        rule = 'lab_train_dynamic1'
-                        human_num = 1
-                    elif probability < 0.7:
-                        rule = 'lab_train_dynamic2'
-                        human_num = 2
-                    else:
-                        rule = 'lab_train_dynamic3'
-                        human_num = 3
-
-                self.human_num = human_num
-
-                self.sample_robot()  # Set Robot
-                self.humans_set = 0  # reset humans counter
-
-                if phase in ['train', 'val']:
-                    # Set num_humans based on base_case
-                    if human_num is None:  # rule != one of the lab base cases
-                        human_num = self.human_num if self.robot.policy.multiagent_training else 1
-                    # Generate Humans
-                    self.generate_random_human_position(human_num=human_num, rule=rule)
-                    logging.debug("%s %d: configuration [agent, px, py, gx, gy, radius, vpref]", phase,
-                                  self.case_counter[phase])
+            if self.train_val_sim == 'lab_train' or self.test_sim == 'lab_train':
+                if probability < 0.05:
+                    rule = 'lab_train_static1'
+                    human_num = 1
+                elif probability < 0.10:
+                    rule = 'lab_train_static2'
+                    human_num = 2
+                elif probability < 0.4:
+                    rule = 'lab_train_dynamic1'
+                    human_num = 1
+                elif probability < 0.7:
+                    rule = 'lab_train_dynamic2'
+                    human_num = 2
                 else:
-                    self.generate_random_human_position(human_num=human_num, rule=rule)
+                    rule = 'lab_train_dynamic3'
+                    human_num = 3
 
-                logging.debug("[robot, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f]", self.robot.px, self.robot.py,
-                             self.robot.gx, self.robot.gy, self.robot.radius, self.robot.v_pref)
-
-                for i, human in enumerate(self.humans):
-                    logging.debug("[agent_%d, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f]", i, human.px, human.py, human.gx,
-                                 human.gy, human.radius, human.v_pref)
-
-                # case_counter is always between 0 and case_size[phase]
-                self.case_counter[phase] = (self.case_counter[phase] + 1) % self.case_size[phase]
+            self.human_num = human_num
+            if specific_test is not None:
+                self.sample_robot(robot)
             else:
-                assert phase == 'test'
-                if self.case_counter[phase] == -1:
-                    # for debugging purposes
-                    self.human_num = 3
-                    self.humans = [Human(self.config, 'humans') for _ in range(self.human_num)]
-                    self.humans[0].set(0, -6, 0, 5, 0, 0, np.pi / 2)
-                    self.humans[1].set(-5, -5, -5, 5, 0, 0, np.pi / 2)
-                    self.humans[2].set(5, -5, 5, 5, 0, 0, np.pi / 2)
-                else:
-                    raise NotImplementedError
+                self.sample_robot()  # Set Robot
+            self.humans_set = 0  # reset humans counter
+
+            if phase in ['train', 'val']:
+                # Set num_humans based on base_case
+                if human_num is None:  # rule != one of the lab base cases
+                    human_num = self.human_num if self.robot.policy.multiagent_training else 1
+                # Generate Humans
+                self.generate_random_human_position(human_num=human_num, rule=rule)
+                logging.debug("%s %d: configuration [agent, px, py, gx, gy, radius, vpref]", phase,
+                              self.case_counter[phase])
+            else:
+                self.generate_random_human_position(human_num=human_num, rule=rule)
+
+            logging.debug("[robot, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f]", self.robot.px, self.robot.py,
+                         self.robot.gx, self.robot.gy, self.robot.radius, self.robot.v_pref)
+
+            for i, human in enumerate(self.humans):
+                logging.debug("[agent_%d, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f]", i, human.px, human.py, human.gx,
+                             human.gy, human.radius, human.v_pref)
+
+            # case_counter is always between 0 and case_size[phase]
+            self.case_counter[phase] = (self.case_counter[phase] + 1) % self.case_size[phase]
 
         for agent in [self.robot] + self.humans:
             agent.time_step = self.time_step

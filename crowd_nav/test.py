@@ -26,6 +26,7 @@ def main():
     parser.add_argument('--circle', default=False, action='store_true')
     parser.add_argument('--video_file', type=str, default=None)
     parser.add_argument('--traj', default=False, action='store_true')
+    parser.add_argument('--specific_test', default=False, action='store_true')
     args = parser.parse_args()
 
     if args.model_dir is not None:
@@ -98,7 +99,7 @@ def main():
     policy.set_env(env)
     robot.print_info()
     if args.visualize:
-        ob = env.reset(args.phase, args.test_case)
+        ob = env.reset(args.phase, args.test_case, args.specific_test)
         done = False
         last_pos = np.array(robot.get_position())
         while not done:

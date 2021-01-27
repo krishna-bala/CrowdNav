@@ -50,7 +50,7 @@ def main():
     # configure logging
     mode = 'a' if args.resume else 'w'
     level = logging.INFO if not args.debug else logging.DEBUG
-    logging.basicConfig(filename=log_file, filemode=mode, level=level,
+    logging.basicConfig(filename=log_file, filemode=mode, level=logging.DEBUG,
                         format='%(asctime)s, %(levelname)s: %(message)s', datefmt="%Y-%m-%d %H:%M:%S")
 
     # create console handler, set level to info
